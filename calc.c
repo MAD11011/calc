@@ -5,7 +5,7 @@
 #include <ctype.h>
 #define COUNT 2
 
-#define DEBUG_MSG
+//#define DEBUG_MSG
 
 #ifdef DEBUG_MSG
 #define DMSG(...) fprintf(stderr,__VA_ARGS__)
@@ -741,7 +741,7 @@ double SolveTree(Tree *tree){
 FILE* fd = NULL;
 Node **node_array = NULL;
 
-const char IDs[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const char IDs[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 char* id_pointer = (char*) IDs;
 
 void PrintNodes(Node *nd){
