@@ -1,700 +1,829 @@
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <string.h>
-#include <math.h>
+#include <ctype.h>
+#define COUNT 2
 
-enum nodetype {
-    OPERAND =  1 << 0,
-    OPERATOR=  1 << 1
+//#define DEBUG_MSG
+
+#ifdef DEBUG_MSG
+#define DMSG(...) fprintf(stderr,__VA_ARGS__)
+#else
+#define DMSG(...)
+#endif
+
+
+enum NodeType {OPERAND,OPERATOR};
+
+struct Elem {
+    void *data;
+    struct Elem *next;
+    struct Elem *perv;
 };
+typedef struct Elem Elem;
 
-enum Operators  {
-    ADD = 1 ,
-    SUB = 2 ,
-    MUL = 3 ,
-    DIV = 4 
+typedef struct  {
+    Elem *top; 
+    size_t size;
+}Queue;
+
+typedef struct {
+    Elem *top;
+    size_t size;
+}Stack;
+
+struct Node {
+    enum NodeType type;
+    union {double num;char sym;};
+    struct Node *parent;
+    struct Node *left;
+    struct Node *right;
 };
+typedef struct Node Node;
+
+typedef struct {
+    Node *root;
+    size_t size;
+}Tree;
 
 
-struct node{
-    struct node *parent;
-    enum nodetype type;
-    union{
-        double d;
-        enum Operators op;
-    }value;
-    struct node *children[2]; 
-};
-typedef struct node tree;
+struct {
+    Tree *main_tree ;
+    Tree *curr_tree ;    
+    Stack *treePoints_stack;
+    Node *last_operator;
+    Queue *operands_queue;
+}ctx;
 
-struct lnode{
-    void *v;
-    struct lnode *next;
-    struct lnode *perv;
-};
-typedef struct lnode stack;
-typedef struct lnode queue;
+const char allowed_chars[] = "+-*/.=()^0123456789";
 
-struct context{
-    stack *treeStack; 
-    queue *operatorQueue;
-};
-
-struct context *current_context = NULL;
-
- 
-
-struct node *root = NULL;
-
-double operands_stack [256] = {0};
-int num_of_operands = 0;
-const char allowed_chars[] = "+-*/().0123456789";
-const char operators_chars[] = "+-*/()";
-size_t precedence_level = 0;
-
-int SyntaxCheck(char * str);
-void Parser(char* str);
-void PrintTree(tree *t);
+char isoperator(char );
+char issign(char );
+void ErrorCheck(const char*);
+void ParseExp(const char*);
+double SolveTree(Tree *);
+void ExportDotFile(const char*,Tree*);
+void print2DUtil(Node* root, int space);
 
 int main(int argc,char* argv[]){
-
-    if(argc > 1){
-        if(SyntaxCheck(argv[1])){
-            Parser(argv[1]);
-            PrintTree(current_context->treeStack->v); 
-        };
+    if(argc == 1){
+        printf("Must provice an expression\n");
+        return 1;
     }
-    else{
-        printf("Please pass an expression\n");
+    char *exp ;
+    char *dot_file_name;
+    char **args = argv;
+    args ++;
+    bool is_option = false;
+    bool produce_dot = false;
+    bool interactive = false;
+    while(*args){
+        char *arg = *args;
+        if(arg[0] == '-'){
+            if(produce_dot){
+                fprintf(stderr,"%s is not a valid file name for the dot file\n",arg);
+                exit(EXIT_FAILURE);
+            }
+            is_option = true;
+            if(strcmp(arg,"--dot")==0){
+                produce_dot = true;
+            }
+            if(strcmp(arg,"-i") == 0){
+                interactive = true;
+            }
+        }else{
+            if(is_option){
+                if(produce_dot){
+                   dot_file_name = arg; 
+                }
+            }else{
+                exp = arg;
+            }
+        }
+        args++;
     }
     
+    ErrorCheck(exp);
+    ParseExp(exp);
+    print2DUtil(ctx.main_tree->root,0);
+    double value = SolveTree(ctx.main_tree);
+    printf("%f\n",value);
+    if(produce_dot){
+        ExportDotFile(dot_file_name,ctx.main_tree); 
+    };
 
     return 0;
-}
+};
 
-
-void HighlightError(int idx){
-    for(int i=1;i<idx+1;i++){
-        putc(' ',stderr);  
-    }
-    fprintf(stderr,"^\n");  
-}
-
-int SyntaxCheck(char * str){
-
-    char* str_p = str;
-    bool errored = false;
-    char* opendParenthesis[32] = {NULL};
+void ErrorCheck(const char *str){
+    char* str_p = (char*)str;
     while(*str_p != '\0'){
-        for(const char *allowed = &allowed_chars[0];*allowed != '\0';allowed++){
-            if(*str_p == *allowed){
-                if(*str_p == '('){
-                    precedence_level++;
-                    opendParenthesis[precedence_level-1] = str_p;
-
-                }
-                else if (*str_p == ')'){
-                    if(precedence_level == 0 ){
-                        errored = true;
-                        int idx = str_p - str;
-                        fprintf(stderr,"Closing Parentheses Before Opening at %d \n",idx);
-                        fprintf(stderr,"%s\n",str);
-                        HighlightError(idx);
-                         
-                    }
-                    else{
-                        precedence_level--;
-                        opendParenthesis[precedence_level] = NULL;
-                    }
-                }
-                break;
-            }
-            if(*allowed == allowed_chars[sizeof(allowed_chars)-2]){
-                errored = true;
-                int idx = str_p - str;
-                fprintf(stderr,"illegal Character %c at %d \n",*str_p,idx);
-                fprintf(stderr,"%s\n",str);
-                HighlightError(idx);
-            }
+        char *chr_p = (char*)allowed_chars;
+        while(*chr_p != '\0'){
+            if(*chr_p == *str_p)break; 
+            chr_p++;
+        }
+        if(*chr_p != *str_p){
+            int idx = str_p - str;  
+            fprintf(stderr,"%s\n",str);
+            fprintf(stderr,"%*c\n",idx+1,'^');
+            fprintf(stderr,"Illegal character\n");
+            exit(EXIT_FAILURE);
         }
         str_p++;
-
     }
-    if(precedence_level > 0){
-        errored = true;
-        for(int i=0;i<precedence_level;i++){
-            int idx = opendParenthesis[i] - str;
-            fprintf(stderr,"Unclosed Parentheses at %d \n",idx);
-            fprintf(stderr,"%s\n",str);
-            HighlightError(idx);
-        }
-
-    };
-    return !errored;
-}
-
-const char * IsOperator(char c){
-    for(const char *operators_p = &operators_chars[0];*operators_p != '\0';operators_p++){
-        if(c == *operators_p){
-            //printf("Matched Operator %c \n",c);
-            return operators_p;
-        }
-    };
- return NULL;
 };
 
-enum Operators GetOperator(const char * op){
-
-    return (enum Operators)strcspn(operators_chars,op)+1;
-
+char isoperator(char c){
+    char *chr_p = (char*) allowed_chars;
+    char delim = '.';
+    while(*chr_p != delim){
+        if(*chr_p == c)break; 
+        chr_p++;
+    }
+    if(*chr_p == delim)return 0;
+    return *chr_p;
 }
 
 
-
-
-double PopOperand(){
-    if(num_of_operands == 0){
-        fprintf(stderr,"Poping empty operands stack");
-        exit(EXIT_FAILURE);
+char issign(char c){
+    char *chr_p = (char*) allowed_chars;
+    char delim = '*';
+    while(*chr_p != delim){
+        if(*chr_p == c)break; 
+        chr_p++;
     }
-    double op = operands_stack[num_of_operands];
-    num_of_operands--;
-    return op;
-};
+    if(*chr_p == delim)return 0;
+    return *chr_p;
+}
 
-struct node* CreateNode(enum nodetype nt){
-    struct node *nd = (struct node*) malloc(sizeof(struct node));
-    nd->parent = NULL;
-    nd->type = nt;
-    nd->children[0] = NULL;
-    nd->children[1] = NULL;
-    nd->value.d = 0.0f;
-    return nd;
-};
+Queue* CreateQueue(){
+    DMSG("Creating New Queue\n");
+    Queue *q = malloc(sizeof(Queue));
+    q->top = NULL;
+    q->size= 0;
+    return q;
+}
 
-void CopyNode(struct node *dest,struct node *src){
-    memcpy(dest,src,sizeof(struct node));
-};
 
-void PrintNode(struct node *nd){
-    char str[128] = {'\0'};
-    if(nd->type == OPERATOR){
-        sprintf(str,"%c",operators_chars[nd->value.op-1]);
+Stack* CreateStack(){
+    DMSG("Creating New Stack\n");
+    Stack *s = malloc(sizeof(Stack));
+    s->top = NULL;
+    s->size = 0;
+    return s;
+}
+
+Tree* CreateTree(){
+    DMSG("Creating New Tree\n");
+    Tree *t = malloc(sizeof(Tree));
+    t->root = NULL;
+    t->size = 0;
+    return t; 
+}
+
+Elem* CreateElem(void *data){
+    DMSG("Creating New Elem\n");
+    Elem *el = malloc(sizeof(Elem));
+    el->data = NULL;
+    el->next = NULL;
+    el->perv = NULL;
+    if(data != NULL)el->data = data;
+    return el;
+}
+
+
+
+Node* CreateNode(enum NodeType type,double val,char sym){
+    Node *n = malloc(sizeof(Node));
+    DMSG("Creating New Node %p\n",n);
+    n->num = 0;
+    n->left = NULL;
+    n->right= NULL;
+    n->type = type;
+    if(type == OPERAND){
+        n->num = val;
     }else{
-        sprintf(str,"%.6g",nd->value.d);
+        n->sym = sym;
     }
-    printf("ADDR: %p\nTYPE: %s\nVALUE: %s\nPARENT: %p\nLEFT: %p\nRIGHT: %p\n",nd,(nd->type == OPERATOR)?"OPERATOR":"OPERAND",str,nd->parent,nd->children[0],nd->children[1]);
-
+    return n;
 }
 
-void AddChild(struct node *nd,struct node *child,size_t idx){
-    if(idx > 1){
-        fprintf(stderr,"children index can't be over 1\n");
-        exit(EXIT_FAILURE);
-    }
-    if(nd->children[idx] != NULL){
-        fprintf(stderr,"child can't be inserted, already occupied\n");
-        exit(EXIT_FAILURE);
-    };
-    printf("Adding %p to %p at %s\n",child,nd,(idx)?"RIGHT":"LEFT");
-    nd->children[idx] = child;
-    child->parent = nd;
-
-}
-
-void AddParent(struct node *nd,struct node *parent,size_t idx){
-    if(idx > 1){
-        fprintf(stderr,"children index can't be over 1\n");
-        exit(EXIT_FAILURE);
-    }
-    if(parent->children[idx] != NULL){
-        fprintf(stderr,"child can't be inserted,Parent already occupied\n");
-        exit(EXIT_FAILURE);
-    };
-    nd->parent = parent;
-    AddChild(parent,nd,idx);
-}
-
-struct lnode* CreateListElem(void* val){
-    struct lnode *nd = (struct lnode*) malloc(sizeof(struct lnode));
-    nd->v = (val != NULL)? val : NULL;
-    nd->next = NULL;
-    nd->perv = NULL;
-    return nd;
-}
-
-void Enqueue(queue **queue,struct lnode *nd){
-    //printf("Adding to queue %p\n",nd->v);
-    if(*queue == NULL){
-        *queue = nd;
+void EnQueue(Queue *q,Elem *el){
+    q->size++;
+    if(q->top == NULL){
+        q->top = el;
         return;
     }
-    struct lnode* last = (*queue);
+    Elem *last = q->top;
     while(last->perv != NULL){
         last = last->perv;
     }
-    nd->next = last;
-    last->perv = nd;
+    last->perv = el;
+    el->next = last;
 
 }
 
-struct lnode* Dequeue(queue **queue){
-    if(*queue == NULL)return NULL;
-    struct lnode *lnd = *queue;
-    *queue = (*queue)->perv;
-    if((*queue) != NULL){
-        (*queue)->next = NULL;
+Elem* DeQueue(Queue *q){
+    if(q->top == NULL){
+        return NULL;
     }
-    lnd->perv = NULL;
-    return lnd;
-};
+    q->size--;
+    Elem *el = q->top;
+    q->top = el->perv;
+    return el;
+}
 
-void PrintQueue(queue *queue){
-    struct lnode *lnd = queue;
-    size_t counter=0;
-    printf("queue element #%ld v:%p\n",counter,lnd->v);
-    while(lnd->perv != NULL){
-        counter++;
-        lnd = lnd->perv;
-        printf("queue element #%ld v:%p\n",counter,lnd->v);
-    }
+void* DeQueueData(Queue *q){
+    Elem *el = DeQueue(q);
+    if(el == NULL)return NULL;
+    void *data = el->data;
+    free(el);
+    return data;
+}
 
-
-};
-
-void PushStack(stack **stack,struct lnode *nd){
-    if(*stack == NULL){
-        *stack = nd;
+void Push(Stack *s,Elem *el){
+    DMSG("Pushing Elem %p containing %p to Stack\n",el,el->data); 
+    s->size++;
+    if(s->top == NULL){
+        s->top = el;
         return;
     }
-    nd->next = *stack;
-    (*stack)->perv = nd;
-    (*stack) = nd;
-};
-
-struct lnode* PopStack(stack **stack){
-    if(*stack == NULL)return NULL;
-    struct lnode *lnd = *stack;
-    *stack = (*stack)->next;
-    if((*stack) != NULL){
-        (*stack)->perv = NULL;
-    }
-    lnd->next = NULL;
-    return lnd;
-};
-
-void DestroyStack(stack *stack,void (*decon)(void* elem)){
-    //printf("Destroying Stack\n");
-    if(stack == NULL)return;
-    struct lnode *last = (struct lnode*)stack;
-    while(last->next != NULL){
-        last = last ->next;
-        if(decon != NULL){
-            decon(last->perv->v);
-        }
-        free(last->perv);
-    };
-    if(decon != NULL){
-        decon(last->v);
-    }
-    free(last);
+    s->top->next = el;
+    el->perv = s->top;
+    s->top = el;
     return;
-};
-
-void DestroyTree(tree *tree){
-    printf("Destroying Tree\n");
-    if(tree == NULL)return;
-    struct node *nd = (struct node*) tree;
-    if(nd->children[0] != NULL){
-        DestroyTree(nd->children[0]);
-    };
-    if(nd->children[1] != NULL){
-        DestroyTree(nd->children[1]);
-    };
-    free(nd);
-
-};
-
-typedef struct{
-    size_t depth;
-    long width_left;
-    size_t num_nodes;
-}treeInfo;
-
-treeInfo GetTreeInfo(tree *t){
-    treeInfo info = {.depth = 0,.width_left = 0,.num_nodes = 1};
-    int l=0,d=0;
-    size_t idx=0;
-    struct node *nd = t;
-    stack *stack = NULL;
-    while(nd != NULL || stack != NULL){
-        while(nd != NULL){
-            PushStack(&stack,CreateListElem(nd));
-            nd = nd->children[0];
-            if(nd != NULL){
-                //printf("Left\n");
-                //printf("%p \n",nd);
-                d++;
-                l++;
-                info.depth = (d > info.depth)? d : info.depth;
-                info.width_left = (l > info.width_left)? l : info.width_left;
-            info.num_nodes++;
-            }
-        }
-        struct lnode *top = PopStack(&stack);
-        nd = (top == NULL)? NULL : top->v;
-        free(top);
-        nd = (nd == NULL)? NULL : nd->children[1];
-        d--;
-        l--;
-        if(nd != NULL){
-            d++;
-            info.depth = (d > info.depth)? d : info.depth;
-            info.num_nodes++;
-        }
-
-    };
-    printf("LEFT %ld\n",info.width_left);
-    DestroyStack(stack,NULL);
-    return info;
-};
-
-typedef struct pa_str{
-    unsigned int abs_offset;
-    struct pa_str* next;
-    char str[];
-} pa_str;
-
-pa_str* CreatePaStr(const char str[],unsigned int offset){
-    pa_str *pastr = malloc(sizeof(pa_str) + sizeof(char) * strlen(str));
-    pastr->abs_offset = offset;
-    strcpy(pastr->str,str);
-    pastr->next = NULL;
-    return pastr;
-};
-
-void InsertPaStr(pa_str *pa,pa_str *ch){
-    pa_str *last = pa;
-    printf("%p",last);
-    while(last->next != NULL){
-        last = last->next;
-        printf("->%p",last);
-    }
-    putchar('\n');
-    last->next = ch;
-};
-
-
-
-void PrintTree(tree *t){
-    treeInfo info = GetTreeInfo(t);
-    int node_v_offset = 1,node_h_offset = 1;
-    unsigned int add_offset = 0;
-    pa_str* strings[info.num_nodes];
-    for(int i=0;i<info.num_nodes;i++){
-        strings[i] = NULL;
-    }
-    size_t num_strings = 0;
-    size_t x = 0,y = 0;
-    int start = 0;
-    struct node *nd = t;
-    queue *queues[2] = {NULL};
-    int  cq = 0;
-    Enqueue(&(queues[cq]),CreateListElem(nd));
-    
-    while(nd != NULL || queues[0] != NULL || queues[1] != NULL){
-        if(queues[cq] == NULL){
-            cq = !cq;
-            y++;
-            x = 0;
-        }
-        struct lnode *top = Dequeue(&(queues[cq]));
-        nd = (top == NULL)?NULL : top->v;
-        free(top);
-        if(nd != NULL){
-            if(nd->children[0] != NULL){
-                x++;
-                Enqueue(&(queues[!cq]),CreateListElem(nd->children[0]));
-            }
-            if(nd->children[1] != NULL){
-                x++;
-                Enqueue(&(queues[!cq]),CreateListElem(nd->children[1]));
-            }
-            char str[128] = {'\0'};
-            size_t len = 0;
-            switch(nd->type){
-                case OPERATOR:
-                    len = sprintf(str,"%c",operators_chars[nd->value.op-1]); 
-                    
-                    if(strings[y] == NULL){
-                        strings[y] = CreatePaStr(str,len+x+(info.width_left-y-1));
-                        num_strings++;
-                    }else{
-                        InsertPaStr(strings[y],CreatePaStr(str,len+x));
-                    }
-                    
-                    break;
-                case OPERAND:
-                    len = sprintf(str,"%.6g",nd->value.d); 
-                    double len_half = round((double)len/2);
-                    if(len_half > info.width_left+x){
-                        int offset = len_half -  info.width_left+x;
-                        len += offset;
-                        for(int i=num_strings-1;i==0;i--){
-                            pa_str *last = strings[i]; 
-                            while(last->next != NULL){
-                                last->abs_offset += offset-1;
-                                last = last->next;
-                            }
-                        }
-                    }
-                    if(strings[y] == NULL){
-                        num_strings++;
-                        strings[y] = CreatePaStr(str,len+x+(info.width_left-y));
-                    }else{
-                        InsertPaStr(strings[y],CreatePaStr(str,len+x));
-                    }
-
-                    break;
-
-            }
-        }
-        else{
-
-        }
-    };
-    printf("Width: %ld, Depth: %ld, Nodes: %ld\n",info.width_left,info.depth,info.num_nodes); 
-    for(int i=0;i<num_strings;i++){
-        pa_str *last = strings[i]; 
-        int idx = 1;
-        printf("%*c",last->abs_offset-strlen(last->str),' ');
-        printf("%s",last->str);
-        while(last->next != NULL){
-            last = last->next;
-            printf("%*c",last->abs_offset-strlen(last->str)-idx,' ');
-            printf("%s",last->str);
-        }
-        putchar('\n');
-    }
 }
-void BeginTree();
-void EndTree();
 
-void BeginCtx(){
-    
-    printf("Begin CTX\n");
-    struct context *ctx = (struct context*) malloc(sizeof(struct context));
-    ctx->treeStack = NULL;
-    ctx->operatorQueue = NULL;
-    current_context = ctx;   
-    BeginTree();
-};
-
-
-void Decon(void* elem){
-   DestroyTree((tree*) elem);  
-}
-void DestroyCtx(struct context* ctx){
-    printf("Destroy CTX\n");
-    if(ctx == NULL)return;
-    //DestroyStack(ctx->treeStack,Decon);
-    //DestroyTree(ctx->currentSubTree);
-    free(ctx);
-};
-
-
-tree* EndCtx(){
-    printf("End CTX\n");
-    struct context *ctx = current_context;
-    EndTree();
-    //DestroyCtx(ctx);    
-    return ctx->treeStack->v;
-};
-
-struct node* GetLastOperatorNode(tree* t,size_t idx){
-    struct node *nd = t;
-    if(t->children[idx] != NULL && t->children[idx]->type & OPERATOR){
-        nd = t->children[idx];
-        nd = GetLastOperatorNode(nd,idx);
+Elem* Pop(Stack *s){
+    if(s->top == NULL){
+        return NULL;
     }
-    return nd;
-};
+    s->size--;
+    Elem *el = s->top;
+    DMSG("Poping Elem %p containing %p\n",el,el->data);
+    s->top = s->top->perv;
+    return el;
+}
+
+void* PopData(Stack *s){
+    Elem *el = Pop(s);
+    if(el == NULL)return NULL;
+    void *data = el->data;
+    free(el);
+    return data;
+}
+
+bool IsChild(Tree* tree,Node *n){
+    Node *root = n;
+    while(n->parent != NULL){
+        root = root->parent;
+    }
+    if(root != tree->root )return 0;
+    return 1;
+}
+
+size_t CountNodes(Node* parent){
+    if(parent == NULL)return 0;
+    return 1+CountNodes(parent->left)+CountNodes(parent->right);
+}
+
+void TreeSize(Tree* tree){
+    DMSG("Counting size of Tree %p\n",tree);
+    Node *n = tree->root;
+    size_t new_size = CountNodes(n);
+    tree->size = new_size;
+    DMSG("New Size = %ld\n",tree->size);
+}
+
+/**
+ *  @side 0:left 1:right
+ */
+bool TreeAdd(Tree* tree,Node *parent,Node *child,unsigned int side){
+    DMSG("Adding Node %p at %p to Tree %p \n",child,parent,tree);
+    if(parent == NULL){
+        tree->root = child;
+        tree->size++;
+        return 1;
+    }
+    if(!IsChild(tree,parent)){
+        fprintf(stderr,"Node not child of tree\n");
+        exit(EXIT_FAILURE);
+    }
+    if(!side){
+        if(parent->left == NULL){
+            parent->left = child;
+            child->parent = parent;
+        }
+        else return 0;
+    }else{
+        if(parent->right == NULL){
+            parent->right = child;
+            child->parent = parent;
+        }
+        else return 0;
+    }
+        tree->size++;
+        if(child->type == OPERATOR){
+            ctx.last_operator = child;
+        }
+    return 1;
+}
+
+/**
+ *  @side 0:left 1:right
+ */
+bool Graft(Tree *tree,Node *parent,Tree *branch,unsigned int side){
+    DMSG("Grafting Tree at %p with %p\n",parent,branch);
+    /*
+    if(!IsChild(tree,parent)){
+        fDMSG(stderr,"Node not child of tree\n");
+        exit(EXIT_FAILURE);
+    }
+    */
+    Node *child = branch->root;
+    if(!side){
+        if(parent->left == NULL){
+            parent->left = child;
+            child->parent = parent;
+        }
+        else return 0;
+    }else{
+        if(parent->right == NULL){
+            parent->right = child;
+            child->parent = parent;
+        }
+        else return 0;
+    }
+    tree->size += branch->size;
+    free(branch);
+    return 1;
+}
+
+/**
+ *  Return a New Tree(branch)
+ */
+Tree *Prune(Tree *tree,Node *new_root){
+    DMSG("Pruning Tree %p at %p\n",tree,new_root);
+
+    DMSG("0!!!!\n");
+    /*
+    if(!IsChild(tree,new_root)){
+        fDMSG(stderr,"Node not child of tree\n");
+        exit(EXIT_FAILURE);
+    }
+    */
+    DMSG("1!!!!\n");
+    Node *parent = new_root->parent;
+    if(parent->left == new_root){
+        parent->left = NULL;
+    }else{
+        parent->right = NULL;
+    }
+    new_root->parent = NULL;
+    DMSG("2!!!!\n");
+
+    Tree *new_tree = CreateTree();
+    new_tree->root = new_root;
+    TreeSize(new_tree);
+    tree->size = tree->size - new_tree->size;
+    
+    return new_tree;
+}
+
+/**
+ *  @side 0:left 1:right
+ */
+bool TreeSwap(Tree *tree,Node *new_parent,unsigned int side){
+    DMSG("Swapping Tree root %p for %p\n",tree->root,new_parent);
+    if(!side){
+        if(new_parent->left == NULL){
+            new_parent->left = tree->root;
+            tree->root->parent = new_parent;
+        }
+        else return 0;
+    }else{
+        if(new_parent->right == NULL){
+            new_parent->right = tree->root;
+            tree->root->parent = new_parent;
+        }
+        else return 0;
+    }
+    tree->root = new_parent;
+    tree->size ++;
+    return 1;
+}
+
+
+void FreeElem(Elem *el){
+    free(el->data);
+    free(el);
+}
+
+void DestroyQueue(Queue *q,void(*decon_f)(Elem*)){
+    Elem *el = NULL;
+    if(decon_f == NULL)decon_f = FreeElem;
+    while((el = DeQueue(q)) != NULL){
+        decon_f(el);
+    }
+    free(q);
+}
+
+void DestroyStack(Stack *s,void(*decon_f)(Elem*)){
+    Elem *el = NULL;
+    if(decon_f == NULL)decon_f = FreeElem;
+    while((el = Pop(s)) != NULL){
+        decon_f(el);
+    }
+    free(s);
+}
+
+void DestroyNodeChildren(Node *n){
+    if(n->left != NULL){
+        DestroyNodeChildren(n->left);
+    }    
+    if(n->right != NULL){
+        DestroyNodeChildren(n->right);
+    }
+    free(n);
+}
+
+
+void DestroyTree(Tree *t){
+    if(t == NULL)return;
+    Node *n = t->root;
+    DestroyNodeChildren(t->root);
+    free(t);
+}
+
+typedef struct {
+    Tree *t;
+    Node *point;
+}MergePoint;
+
+MergePoint* CreateMergePoint(Tree *t,Node *p){
+    MergePoint *mp = malloc(sizeof(MergePoint));
+    mp->t = t;
+    mp->point = p;
+    DMSG("Creating merge Point: %p\n  Tree: %p\n  Point: %p\n",mp,mp->t,mp->point);
+    return mp;
+}
+
+void FreeTreeElems(Elem *el){
+    DestroyTree(((MergePoint*)el->data)->t); 
+    free(((MergePoint*)el->data));
+}
+
+void FreeNodeElems(Elem *el){
+    free(el->data);
+    free(el);
+}
+
 
 void BeginTree(){
-    struct context *ctx = current_context;
-    printf("Begin Tree\n");
-    PushStack(&ctx->treeStack,CreateListElem(NULL));
-    Dequeue(&(ctx->operatorQueue));
-
-
+    Tree *t = CreateTree();
+    DMSG("Starting Tree %p\n",t);
+    MergePoint *mp = CreateMergePoint(ctx.curr_tree,ctx.last_operator);
+    Push(ctx.treePoints_stack,CreateElem((void*)mp));
+    ctx.curr_tree = t;
 };
 
 void EndTree(){
-    struct context *ctx = current_context;
-    if(ctx->treeStack == NULL){
-       fprintf(stderr,"Called End Tree before and BeginTree\n");
-       exit(EXIT_FAILURE);
-    }
-    printf("End Tree\n");
-    struct lnode *t = PopStack(&(ctx->treeStack)) ;
-    struct lnode *tmp = ctx->treeStack; 
-    /*
-    printf("Merging\n");
-    PrintTree(t->v);
-    printf("To\n");
-    PrintTree(tmp->v);
-    */
-
-    if(tmp == NULL){
-        PushStack(&(ctx->treeStack),t);
-        return;
-    }else{
-        AddChild((tree*)tmp->v,t->v,1);
-    }
-
-}
-void AddOperator(struct node *nd){
-    printf("Adding Operator\n");
-    if(nd->type != OPERATOR){
-        fprintf(stderr,"Node passed as OPERATOR NODE but is NOT\n");
-        exit(EXIT_FAILURE);
-    };
-    printf("value OP = %d, value c = %c\n",nd->value.op,operators_chars[nd->value.op-1]);
-    struct context *ctx = current_context;
     
-    if(ctx->treeStack->v == NULL){
-        printf("Added Root");
-        ctx->treeStack->v = nd;
-        //if Root insert to queue twice
-        Enqueue(&(ctx->operatorQueue),CreateListElem(ctx->treeStack->v));
-        Enqueue(&(ctx->operatorQueue),CreateListElem(ctx->treeStack->v));
+    MergePoint *mt = (MergePoint*) PopData(ctx.treePoints_stack);
+    if(mt == NULL)return;
+    if(mt->point == NULL){
+        DMSG("Setting Main Tree %p\n",ctx.curr_tree);
+        ctx.main_tree = ctx.curr_tree;
+        free(mt);
         return;
+    }
+    Graft(mt->t,mt->point,ctx.curr_tree,1);
+    ctx.last_operator = mt->point;
+    ctx.curr_tree = mt->t;
+    free(mt);
+}
+
+void BeginCtx(){
+    ctx.main_tree = NULL;
+    ctx.curr_tree = NULL;
+    ctx.treePoints_stack = CreateStack();
+    ctx.last_operator = NULL;
+    ctx.operands_queue = CreateQueue();
+};
+
+void EndCtx(){
+    for(int i=0;i<ctx.treePoints_stack->size;i++){
+        EndTree();        
+    }
+    //DestroyTree(ctx.curr_tree);
+    free(ctx.treePoints_stack);
+    DestroyQueue(ctx.operands_queue,FreeNodeElems);
+}
+
+void AddOperand(double val){
+    Tree *t = ctx.curr_tree;
+    Node *n = CreateNode(OPERAND,val,0);
+    DMSG("Adding Operand Node of val %f %p\n",val,n);
+    if(t->size == 0){
+        EnQueue(ctx.operands_queue,CreateElem(n));
+        return;
+    }
+    TreeAdd(t,ctx.last_operator,n,1);
+}
+
+
+void InsertADD(Node *n){
+    Tree *t = ctx.curr_tree;
+    if(t->root == NULL){
+        TreeAdd(t,NULL,n,0);
+        if(ctx.operands_queue->size > 0){
+            Node *queued_n = DeQueueData(ctx.operands_queue);
+            TreeAdd(t,n,queued_n,0); 
+            return;
+        }
     }
     else{
-        printf("Root %p\n",ctx->treeStack->v);
-    }
-    struct lnode *tmp = ctx->treeStack;
-    tree *root = ctx->treeStack->v;
-    printf("Added Operator %p\n",nd);
-    switch(nd->value.op){
-        case MUL:
-        case DIV:
-            if(root->value.op == MUL || root->value.op == DIV){
-                Enqueue(&(ctx->operatorQueue),CreateListElem(nd));
-                AddParent(root,nd,0);
-                ctx->treeStack->v = nd;
-            }else{
-                Dequeue(&(ctx->operatorQueue));
-                BeginTree();
-                AddOperator(nd);
-            }
-            break;
-
-        case ADD:
-        case SUB:
-            if(root->value.op == MUL || root->value.op == DIV ){
-                EndTree();
-            }
-            Enqueue(&(ctx->operatorQueue),CreateListElem(nd));
-            AddParent(root,nd,0);
-            ctx->treeStack->v = nd;
-            break;
-
-
-    };
-
-}
-
-void AddOperand(struct node *nd){
-    printf("Adding Operand\n");
-    printf("value OP = %d, value c = %.6g\n",nd->value.op,nd->value.d);
-    if(nd->type != OPERAND){
-        fprintf(stderr,"Node passed as OPERAND NODE but is NOT\n");
-        exit(EXIT_FAILURE);
-    };
-    struct context *ctx = current_context;
-    struct lnode *top = Dequeue(&ctx->operatorQueue);
-    struct node *parent = (top == NULL)?NULL : top->v;
-    if(parent == NULL){
-        
-    }
-    if(parent->children[0] == NULL){
-        AddChild(parent,nd,0);
-    }
-    else if(parent->children[1] == NULL){
-        AddChild(parent,nd,1);
-    }else{
-        fprintf(stderr,"No Place to Place OPERAND NODE\n");
-        printf("---Node---\n");
-        PrintNode(nd);
-        printf("---Parent---\n");
-        PrintNode(parent);
-        exit(EXIT_FAILURE);
-    };
-
-
-}
-
-
-
-
-typedef struct  {
-    double operand;
-    enum Operators operator;
-}slice;
-
-
-
-
-
-void Parser(char* str){
-    printf("%s what??\n",str);
-    char* ptr = str;
-    BeginCtx();
-    while(true){
-        ptr = strpbrk(str,operators_chars);
-        ptr = (ptr == NULL)? &str[strlen(str)] : ptr;
-        printf("%c\n",*ptr);
-        double operand_v = 0.0f;
-        enum Operators operator_v = 0;
-        int span = ptr - str;
-        if(*ptr == '('){
-            BeginTree();
-            if(span > 0){
-                struct node *operator_n = CreateNode(OPERATOR); 
-                operator_n->value.op = MUL;
-                AddOperator(operator_n);
-            }
-        }
-        else if(*ptr == ')'){
+        Node *root = t->root;
+        if(root->sym == '*' || root->sym == '/'){
             EndTree();
-            char next_char = *(ptr+1);
-            if(next_char != '\0' && !IsOperator(next_char)){
-                struct node *operator_n = CreateNode(OPERATOR); 
-                operator_n->value.op = MUL;
-                AddOperator(operator_n);
-            }
         }
-        else if(*ptr != '\0'){
-            enum Operators operator_v = GetOperator(ptr);
-            printf("ENUM %d\n",operator_v);
-            struct node *operator_n = CreateNode(OPERATOR); 
-            operator_n->value.op = operator_v;
-            AddOperator(operator_n);
-        }
-
-        if(span>0){
-            operand_v = atof(str); 
-            struct node *operand_n = CreateNode(OPERAND); 
-            operand_n->value.d = operand_v;
-            AddOperand(operand_n);
-        }
-        if(*ptr == '\0')break;
-        str = ptr+1;
-        printf("\n");
+        TreeSwap(ctx.curr_tree,n,0);
     }
-    EndCtx();
-    exit(EXIT_SUCCESS);
+}
+void InsertSUB(Node *n){
+    Tree *t = ctx.curr_tree;
+    if(t->root == NULL){
+        TreeAdd(t,NULL,n,0);
+        if(ctx.operands_queue->size > 0){
+            Node *queued_n = DeQueueData(ctx.operands_queue);
+            TreeAdd(t,n,queued_n,0); 
+            return;
+        }
+    }
+    else{
+        Node *root = t->root;
+        if(root->sym == '*' || root->sym == '/'){
+            EndTree();
+        }
+        TreeSwap(ctx.curr_tree,n,0);
+    }
+}
+void InsertMUL(Node *n){
+    Tree *t = ctx.curr_tree;
+    if(t->root == NULL ){
+        TreeAdd(t,NULL,n,0);
+        if(ctx.operands_queue->size > 0){
+            Node *queued_n = DeQueueData(ctx.operands_queue);
+            TreeAdd(t,n,queued_n,0); 
+            return;
+        }
+        return;
+    }
+    if(t->root->type == '*' || t->root->type == '/'){
+        TreeSwap(t,n,0); 
+    }else{
+        Tree *branch = NULL;
+        if(ctx.last_operator->right != NULL){
+           branch = Prune(t,ctx.last_operator->right);
+        }
+        BeginTree();
+        t = ctx.curr_tree;
+        TreeAdd(t,NULL,n,0);
+        Graft(t,t->root,branch,0);
+    }
+}
+void InsertDIV(Node *n){
+    Tree *t = ctx.curr_tree;
+    if(t->root == NULL ){
+        TreeAdd(t,NULL,n,0);
+        if(ctx.operands_queue->size > 0){
+            Node *queued_n = DeQueueData(ctx.operands_queue);
+            TreeAdd(t,n,queued_n,0); 
+            return;
+        }
+        return;
+    }
+    if(t->root->type == '*' || t->root->type == '/'){
+        TreeSwap(t,n,0); 
+    }else{
+        Tree *branch = NULL;
+        if(ctx.last_operator->right != NULL){
+           branch = Prune(t,ctx.last_operator->right);
+        }
+        BeginTree();
+        t = ctx.curr_tree;
+        TreeAdd(t,NULL,n,0);
+        Graft(t,t->root,branch,0);
+    }
+
 }
 
+void AddOperator(char sym){
+    if(!isoperator(sym)){
+        fprintf(stderr,"Invalid operator symbol\n");
+        exit(EXIT_FAILURE);
+    }
+    Node *n = CreateNode(OPERATOR,0,sym);
+    DMSG("Adding Operator Node %c %p\n",sym,n);
+    switch(sym){
+        case '+':
+            InsertADD(n);
+            break;
+        case '-':
+            InsertSUB(n);
+            break;
+        case '*':
+            InsertMUL(n);
+            break;
+        case '/':
+            InsertDIV(n);
+            break;
+    }
+    ctx.last_operator = n;
+}
+
+void ParseExp(const char *str){
+    char *str_p = (char*)str;
+    enum NodeType parse_target = OPERAND;
+    BeginCtx();
+    BeginTree();
+    while(*str_p != '\0'){
+        if(*str_p == '('){
+            BeginTree();
+            /*
+            if(parse_target == OPERATOR){
+                AddOperator('*');
+                parse_target = OPERAND;
+            }
+            */
+        }
+        else if(*str_p == ')'){
+            EndTree();
+        }
+        else if(parse_target == OPERAND){
+            if(isdigit(*str_p) || issign(*str_p)){
+                double val = atof(str_p);
+                AddOperand(val);
+                parse_target = OPERATOR;
+            }
+        }
+        else if(parse_target == OPERATOR){
+            if(isoperator(*str_p)){
+                AddOperator(*str_p);
+                parse_target = OPERAND;
+            }
+        }
+        str_p++;
+    }
+    EndTree();
+    EndCtx();
+}
+
+void TraverseTree(Node *nd,void (*on_enter) (Node*)){
+    on_enter(nd);
+    if(nd->left != NULL){
+        TraverseTree(nd->left,on_enter);
+    }
+    if(nd->right != NULL){
+        TraverseTree(nd->right,on_enter);
+    }
+}
+
+double SolveNode(Node *nd){
+    double left_value = 0,right_value = 0;
+
+    if(nd->left->type == OPERATOR){
+        left_value = SolveNode(nd->left);
+    }
+    else{
+        left_value = nd->left->num;  
+    }
+    if(nd->right->type == OPERATOR){
+        right_value = SolveNode(nd->right);
+    }
+    else{
+        right_value = nd->right->num;
+    }
+    switch(nd->sym){
+            case '+':
+                return left_value + right_value;
+                break;
+            case '-':
+                return left_value - right_value;
+                break;
+            case '*':
+                return left_value * right_value;
+                break;
+            case '/':
+                return left_value / right_value;
+                break;
+    }
+
+    return 0; 
+
+}
+
+double SolveTree(Tree *tree){
+    return SolveNode(tree->root); 
+}
+
+FILE* fd = NULL;
+Node **node_array = NULL;
+
+const char IDs[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+char* id_pointer = (char*) IDs;
+
+void PrintNodes(Node *nd){
+    if(*id_pointer == '\0')return ;
+    node_array[id_pointer-IDs] = nd;
+    DMSG("Attached Node %p to Key %c || %ld\n",nd,*id_pointer,id_pointer-IDs);
+    char text[64] = {'\0'};
+    char name[32] = {'\0'};
+    if(nd->type == OPERAND){
+        sprintf(name,"%.0f",nd->num);
+    }
+    else if(nd->type == OPERATOR){
+        sprintf(name,"%c",nd->sym);
+    }
+    size_t count = sprintf(text,"   %c [label=\"%s\"]\n",*id_pointer,name);
+    fwrite(text,1,count,fd);  
+
+    id_pointer++;
+}
+
+char GetID(Node *nd){
+    char id = 0;
+    for(int i=0;i<sizeof(IDs);i++){
+        if(node_array[i] == nd){
+            id = IDs[i]; 
+            DMSG("Matched Node %p to ID %c\n",nd,id);
+            break;
+        }
+    }
+    return id;
+}
+
+void ConnectNodes(Node *nd){
+    char text[64] = {'\0'};
+    char id = GetID(nd);
+    char l_id,r_id;
+    l_id = (nd->left != NULL)? GetID(nd->left) : 0;
+    r_id = (nd->right != NULL)? GetID(nd->right) : 0;
+    if(l_id){
+        int count = sprintf(text,"  %c -> %c\n",id,l_id);
+        fwrite(text,1,count,fd);  
+    }
+    if(r_id){
+        int count = sprintf(text,"  %c -> %c\n",id,r_id);
+        fwrite(text,1,count,fd);  
+    }
+
+}
+
+void ExportDotFile(const char *file_name,Tree *tree){
+    fd = fopen(file_name,"w");
+    node_array = malloc(sizeof(Node*)*tree->size); 
+    fprintf(fd,"digraph Exp {\n");
+
+    TraverseTree(tree->root,PrintNodes);
+    TraverseTree(tree->root,ConnectNodes);
+
+    fprintf(fd,"}\n");
+
+    fclose(fd);
+    free(node_array);
+
+    
+}
+
+
+
+void print2DUtil(Node* root, int space)
+{
+    // Base case
+    if (root == NULL)
+        return;
+ 
+    // Increase distance between levels
+    space += COUNT;
+ 
+    // Process right child first
+    print2DUtil(root->right, space);
+ 
+    // Print current node after space
+    // count
+    DMSG("\n");
+    for (int i = COUNT; i < space; i++)
+        DMSG(" ");
+    if(root->type == OPERAND){
+        DMSG("%f\n", root->num);
+    }
+    else if(root->type == OPERATOR){
+        DMSG("%c\n", root->sym);
+    }
+ 
+    // Process left child
+    print2DUtil(root->left, space);
+}
