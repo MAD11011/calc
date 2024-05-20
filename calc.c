@@ -5,7 +5,7 @@
 #include <ctype.h>
 #define COUNT 2
 
-//#define DEBUG_MSG
+#define DEBUG_MSG
 
 #ifdef DEBUG_MSG
 #define DMSG(...) fprintf(stderr,__VA_ARGS__)
@@ -56,7 +56,7 @@ struct {
     Queue *operands_queue;
 }ctx;
 
-const char allowed_chars[] = "+-*/.=()^0123456789";
+const char allowed_chars[] = "+-*/.=()^0123456789\n";
 
 char isoperator(char );
 char issign(char );
@@ -65,6 +65,8 @@ void ParseExp(const char*);
 double SolveTree(Tree *);
 void ExportDotFile(const char*,Tree*);
 void print2DUtil(Node* root, int space);
+
+void DestroyTree(Tree *t);
 
 int main(int argc,char* argv[]){
     if(argc == 1){
@@ -103,15 +105,22 @@ int main(int argc,char* argv[]){
         }
         args++;
     }
-    
-    ErrorCheck(exp);
-    ParseExp(exp);
-    print2DUtil(ctx.main_tree->root,0);
-    double value = SolveTree(ctx.main_tree);
-    printf("%f\n",value);
-    if(produce_dot){
-        ExportDotFile(dot_file_name,ctx.main_tree); 
-    };
+    size_t exp_size = 0; 
+    do{
+        ErrorCheck(exp);
+        ParseExp(exp);
+        print2DUtil(ctx.main_tree->root,0);
+        double value = SolveTree(ctx.main_tree);
+        printf("%f\n",value);
+        if(produce_dot){
+            ExportDotFile(dot_file_name,ctx.main_tree); 
+        };
+        if(interactive){
+            getline(&exp,&exp_size,stdin);
+        }
+        DestroyTree(ctx.main_tree);
+        ctx.main_tree = NULL;
+    }while(interactive);
 
     return 0;
 };
@@ -301,16 +310,18 @@ void TreeSize(Tree* tree){
  *  @side 0:left 1:right
  */
 bool TreeAdd(Tree* tree,Node *parent,Node *child,unsigned int side){
-    DMSG("Adding Node %p at %p to Tree %p \n",child,parent,tree);
+    DMSG("++Adding Node %p at %p to Tree %p \n",child,parent,tree);
     if(parent == NULL){
         tree->root = child;
         tree->size++;
         return 1;
     }
+    /*
     if(!IsChild(tree,parent)){
         fprintf(stderr,"Node not child of tree\n");
         exit(EXIT_FAILURE);
     }
+    */
     if(!side){
         if(parent->left == NULL){
             parent->left = child;
@@ -335,7 +346,7 @@ bool TreeAdd(Tree* tree,Node *parent,Node *child,unsigned int side){
  *  @side 0:left 1:right
  */
 bool Graft(Tree *tree,Node *parent,Tree *branch,unsigned int side){
-    DMSG("Grafting Tree at %p with %p\n",parent,branch);
+    DMSG("/\\Grafting Tree at %p with %p\n",parent,branch);
     /*
     if(!IsChild(tree,parent)){
         fDMSG(stderr,"Node not child of tree\n");
@@ -365,16 +376,15 @@ bool Graft(Tree *tree,Node *parent,Tree *branch,unsigned int side){
  *  Return a New Tree(branch)
  */
 Tree *Prune(Tree *tree,Node *new_root){
-    DMSG("Pruning Tree %p at %p\n",tree,new_root);
+    DMSG("-\\Pruning Tree %p at %p\n",tree,new_root);
 
-    DMSG("0!!!!\n");
     /*
     if(!IsChild(tree,new_root)){
         fDMSG(stderr,"Node not child of tree\n");
         exit(EXIT_FAILURE);
     }
     */
-    DMSG("1!!!!\n");
+
     Node *parent = new_root->parent;
     if(parent->left == new_root){
         parent->left = NULL;
@@ -382,7 +392,6 @@ Tree *Prune(Tree *tree,Node *new_root){
         parent->right = NULL;
     }
     new_root->parent = NULL;
-    DMSG("2!!!!\n");
 
     Tree *new_tree = CreateTree();
     new_tree->root = new_root;
@@ -396,7 +405,7 @@ Tree *Prune(Tree *tree,Node *new_root){
  *  @side 0:left 1:right
  */
 bool TreeSwap(Tree *tree,Node *new_parent,unsigned int side){
-    DMSG("Swapping Tree root %p for %p\n",tree->root,new_parent);
+    DMSG("&Swapping Tree root %p for %p\n",tree->root,new_parent);
     if(!side){
         if(new_parent->left == NULL){
             new_parent->left = tree->root;
@@ -581,7 +590,7 @@ void InsertMUL(Node *n){
         }
         return;
     }
-    if(t->root->type == '*' || t->root->type == '/'){
+    if(t->root->sym == '*' || t->root->sym == '/'){
         TreeSwap(t,n,0); 
     }else{
         Tree *branch = NULL;
@@ -605,7 +614,7 @@ void InsertDIV(Node *n){
         }
         return;
     }
-    if(t->root->type == '*' || t->root->type == '/'){
+    if(t->root->sym == '*' || t->root->sym == '/'){
         TreeSwap(t,n,0); 
     }else{
         Tree *branch = NULL;
@@ -649,7 +658,7 @@ void ParseExp(const char *str){
     enum NodeType parse_target = OPERAND;
     BeginCtx();
     BeginTree();
-    while(*str_p != '\0'){
+    while(*str_p != '\0' && *str_p != '\n'){
         if(*str_p == '('){
             BeginTree();
             /*
@@ -785,6 +794,7 @@ void ConnectNodes(Node *nd){
 void ExportDotFile(const char *file_name,Tree *tree){
     fd = fopen(file_name,"w");
     node_array = malloc(sizeof(Node*)*tree->size); 
+    id_pointer = (char*)IDs;
     fprintf(fd,"digraph Exp {\n");
 
     TraverseTree(tree->root,PrintNodes);
